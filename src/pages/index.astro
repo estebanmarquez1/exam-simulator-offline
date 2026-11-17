@@ -1,0 +1,75 @@
+---
+import Layout from '../layouts/Layout.astro';
+import questionsData from '../data/questions.json';
+const totalQuestions = questionsData.length;
+---
+<Layout title="Salesforce Platform Exam Simulator (Offline)">
+  <div class="min-h-screen flex flex-col items-center justify-center px-4 py-16">
+    <div class="max-w-3xl w-full text-center">
+      <div class="mb-3">
+        <span class="inline-block bg-blue-100 text-blue-700 text-sm font-semibold px-3 py-1 rounded-full">
+          Salesforce Platform Administrator · Offline
+        </span>
+      </div>
+      <h1 class="text-4xl font-bold text-slate-800 mb-3">Exam Simulator</h1>
+      <p class="text-slate-500 text-lg mb-12">
+        {totalQuestions} questions · Randomized order · Shuffled options · No sign-in required
+      </p>
+
+      <div class="grid grid-cols-1 sm:grid-cols-3 gap-6">
+        <!-- Practice Mode -->
+        <a
+          href="/practice"
+          class="group flex flex-col items-start p-6 bg-white border-2 border-slate-200 rounded-2xl shadow-sm hover:border-blue-400 hover:shadow-md transition-all duration-200 text-left"
+        >
+          <div class="w-12 h-12 bg-blue-100 rounded-xl flex items-center justify-center mb-4 group-hover:bg-blue-200 transition-colors">
+            <svg class="w-6 h-6 text-blue-600" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/>
+            </svg>
+          </div>
+          <h2 class="text-xl font-bold text-slate-800 mb-2">Practice Mode</h2>
+          <p class="text-slate-500 text-sm leading-relaxed">
+            Answer questions one by one and get instant feedback. Progress is saved locally.
+          </p>
+          <span class="mt-4 text-blue-600 text-sm font-semibold group-hover:underline">Start practicing →</span>
+        </a>
+
+        <!-- Exam Mode -->
+        <a
+          href="/exam"
+          class="group flex flex-col items-start p-6 bg-white border-2 border-slate-200 rounded-2xl shadow-sm hover:border-violet-400 hover:shadow-md transition-all duration-200 text-left"
+        >
+          <div class="w-12 h-12 bg-violet-100 rounded-xl flex items-center justify-center mb-4 group-hover:bg-violet-200 transition-colors">
+            <svg class="w-6 h-6 text-violet-600" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
+            </svg>
+          </div>
+          <h2 class="text-xl font-bold text-slate-800 mb-2">Exam Simulation</h2>
+          <p class="text-slate-500 text-sm leading-relaxed">
+            Full timed simulation. 105 minutes to answer all questions. Score shown at the end.
+          </p>
+          <span class="mt-4 text-violet-600 text-sm font-semibold group-hover:underline">Start exam →</span>
+        </a>
+
+        <!-- Review Mode -->
+        <a
+          href="/review"
+          class="group flex flex-col items-start p-6 bg-white border-2 border-slate-200 rounded-2xl shadow-sm hover:border-emerald-400 hover:shadow-md transition-all duration-200 text-left"
+        >
+          <div class="w-12 h-12 bg-emerald-100 rounded-xl flex items-center justify-center mb-4 group-hover:bg-emerald-200 transition-colors">
+            <svg class="w-6 h-6 text-emerald-600" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+            </svg>
+          </div>
+          <h2 class="text-xl font-bold text-slate-800 mb-2">Review Mode</h2>
+          <p class="text-slate-500 text-sm leading-relaxed">
+            Spaced repetition powered by SM-2. Shows questions due for review based on your local history.
+          </p>
+          <span class="mt-4 text-emerald-600 text-sm font-semibold group-hover:underline">Start reviewing →</span>
+        </a>
+      </div>
+
+      <p class="mt-10 text-slate-400 text-xs">All data is stored locally in your browser via IndexedDB. No account needed.</p>
+    </div>
+  </div>
+</Layout>

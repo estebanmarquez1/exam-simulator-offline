@@ -1,0 +1,333 @@
+---
+import Layout from '../layouts/Layout.astro';
+---
+<Layout title="Active Recall – Exam Simulator">
+  <div class="min-h-screen flex flex-col">
+    <!-- Header -->
+    <header class="bg-white border-b border-slate-200 sticky top-0 z-10">
+      <div class="relative flex items-center px-4 py-3">
+        <a href="/" class="text-slate-400 hover:text-slate-700 transition-colors flex items-center gap-2 text-sm font-medium">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M10 19l-7-7m0 0l7-7m-7 7h18"/>
+          </svg>
+          Home
+        </a>
+        <span class="absolute left-0 right-0 text-center text-sm font-semibold text-slate-700 pointer-events-none">Active Recall</span>
+        <span id="review-counter" class="ml-auto text-sm text-slate-500 font-medium" aria-live="polite"></span>
+      </div>
+      <div class="h-1 bg-slate-100" role="progressbar" aria-label="Session progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+        <div id="review-progress-bar" class="h-1 bg-emerald-500 transition-all duration-300" style="width: 0%"></div>
+      </div>
+    </header>
+
+    <!-- Error banner -->
+    <div id="error-banner" class="hidden max-w-2xl mx-auto w-full px-4 pt-4" role="alert" aria-live="assertive">
+      <div class="flex items-center gap-3 bg-red-50 border border-red-200 text-red-700 text-sm font-medium px-4 py-3 rounded-xl">
+        <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/>
+        </svg>
+        <span id="error-banner-text">Could not save progress.</span>
+      </div>
+    </div>
+
+    <!-- Main -->
+    <main id="review-area" class="flex-1 max-w-2xl mx-auto w-full px-4 py-8" tabindex="-1">
+      <!-- Loading state shown until IndexedDB query completes -->
+      <div id="loading-state" class="text-center py-16 text-slate-400 text-sm">Loading your review queue…</div>
+    </main>
+  </div>
+</Layout>
+
+<script>
+  import { escapeHtml, isAnswerCorrect, normalizeQuestions } from '../lib/questionUtils';
+  import { getDueQuestionNumbers, getAllProgress, patchFirstVisitDueDates, saveReviewRating, resetProgress } from '../lib/db';
+  import type { NormalizedQuestion } from '../types/question';
+  import questionsRaw from '../data/questions.json';
+
+  const area = document.getElementById('review-area') as HTMLElement;
+  const counter = document.getElementById('review-counter') as HTMLElement;
+  const progressBar = document.getElementById('review-progress-bar') as HTMLElement;
+  const progressBarWrapper = progressBar.parentElement as HTMLElement;
+  const errorBanner = document.getElementById('error-banner') as HTMLElement;
+  const errorBannerText = document.getElementById('error-banner-text') as HTMLElement;
+
+  let queue: NormalizedQuestion[] = [];
+  let totalCount = 0;
+  let masteredCount = 0;
+  let selected: Set<string> = new Set();
+  let checked = false;
+  let lastCorrect = false;
+
+  function showError(msg: string): void {
+    errorBannerText.textContent = msg;
+    errorBanner.classList.remove('hidden');
+    setTimeout(() => errorBanner.classList.add('hidden'), 5000);
+  }
+
+  function updateHeader(): void {
+    if (totalCount === 0) { counter.textContent = ''; return; }
+    counter.textContent = `Mastered ${masteredCount} / ${totalCount}`;
+    const pct = (masteredCount / totalCount) * 100;
+    progressBar.style.width = `${pct}%`;
+    progressBarWrapper.setAttribute('aria-valuenow', String(Math.round(pct)));
+  }
+
+  function renderNoCards(): void {
+    counter.textContent = '';
+    area.innerHTML = `
+      <div class="text-center py-16">
+        <div class="w-20 h-20 bg-slate-100 rounded-full flex items-center justify-center mx-auto mb-6">
+          <svg class="w-10 h-10 text-slate-400" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+          </svg>
+        </div>
+        <h2 class="text-2xl font-bold text-slate-800 mb-2">No cards due for review</h2>
+        <p class="text-slate-500 mb-2">All caught up! Cards you've already reviewed are scheduled to return based on your performance.</p>
+        <p class="text-sm text-slate-400">Haven't started yet? Complete a practice or exam session first — cards will appear here immediately.</p>
+        <div class="flex gap-3 justify-center mt-8">
+          <a href="/exam" class="bg-violet-600 hover:bg-violet-700 text-white font-semibold px-5 py-2.5 rounded-xl text-sm transition-colors">Start Exam</a>
+          <a href="/practice" class="bg-blue-600 hover:bg-blue-700 text-white font-semibold px-5 py-2.5 rounded-xl text-sm transition-colors">Practice Mode</a>
+        </div>
+      </div>
+    `;
+  }
+
+  function renderComplete(): void {
+    progressBar.style.width = '100%';
+    progressBarWrapper.setAttribute('aria-valuenow', '100');
+    area.innerHTML = `
+      <div class="text-center py-16">
+        <div class="w-20 h-20 bg-emerald-100 rounded-full flex items-center justify-center mx-auto mb-6">
+          <svg class="w-10 h-10 text-emerald-600" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+          </svg>
+        </div>
+        <h2 class="text-2xl font-bold text-slate-800 mb-2">Session complete!</h2>
+        <p class="text-slate-500 mb-1">You answered all <strong>${totalCount}</strong> due question${totalCount === 1 ? '' : 's'} correctly.</p>
+        <p class="text-sm text-slate-400 mt-2">Keep doing exams and practice — new cards will appear here when they're due.</p>
+        <div class="flex gap-3 justify-center mt-8">
+          <a href="/review" class="bg-emerald-600 hover:bg-emerald-700 text-white font-semibold px-5 py-2.5 rounded-xl text-sm transition-colors">New Session</a>
+          <a href="/" class="bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold px-5 py-2.5 rounded-xl text-sm transition-colors">Home</a>
+          <button onclick="handleReset()" class="bg-red-100 hover:bg-red-200 text-red-700 font-semibold px-5 py-2.5 rounded-xl text-sm transition-colors cursor-pointer">Reset Progress</button>
+        </div>
+      </div>
+    `;
+  }
+
+  function renderCard(): void {
+    if (queue.length === 0) { renderComplete(); return; }
+    const q = queue[0];
+    selected = new Set();
+    checked = false;
+    updateHeader();
+
+    const optionsHtml = q.options.map(([letter, text]) => `
+      <button
+        class="w-full text-left px-5 py-4 rounded-xl border-2 border-slate-200 bg-white text-slate-700 hover:border-slate-300 hover:bg-slate-50 transition-all duration-150 cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 focus-visible:ring-offset-2"
+        data-letter="${letter}"
+        onclick="recallSelect('${letter}')"
+        aria-pressed="false"
+        aria-label="Option ${letter}: ${escapeHtml(text)}"
+      >
+        <div class="flex items-start gap-3">
+          <span class="w-6 h-6 rounded-full border-2 border-slate-300 bg-white flex-shrink-0" aria-hidden="true" id="icon-${letter}"></span>
+          <span class="leading-relaxed text-sm">${escapeHtml(text)}</span>
+        </div>
+      </button>
+    `).join('');
+
+    area.innerHTML = `
+      <div>
+        ${q.topic ? `<div class="mb-3"><span class="text-xs font-semibold text-emerald-700 bg-emerald-50 border border-emerald-100 px-2.5 py-1 rounded-full">${escapeHtml(q.topic)}</span></div>` : ''}
+        <div class="flex items-center gap-3 mb-4">
+          <span class="text-xs font-semibold text-slate-400 uppercase tracking-wide">Q${q.originalNumber}</span>
+          ${q.isMulti ? `<span class="text-xs bg-amber-100 text-amber-700 font-semibold px-2.5 py-0.5 rounded-full">Select ${q.answer.length} answers</span>` : ''}
+        </div>
+        <h2 class="text-lg font-semibold text-slate-800 mb-6 leading-relaxed whitespace-pre-line">${escapeHtml(q.question)}</h2>
+
+        <div id="options-area" class="flex flex-col gap-3 mb-6" role="group" aria-label="Answer options">
+          ${optionsHtml}
+        </div>
+
+        <button
+          id="check-btn"
+          onclick="recallCheck()"
+          disabled
+          class="w-full py-3 rounded-xl font-semibold text-sm bg-slate-300 text-white transition-colors cursor-not-allowed focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 focus-visible:ring-offset-2"
+        >
+          Check Answer
+        </button>
+
+        <div id="result-area" class="hidden"></div>
+      </div>
+    `;
+  }
+
+  (window as Window & typeof globalThis & Record<string, unknown>).recallSelect = (letter: string): void => {
+    if (checked) return;
+    const q = queue[0];
+    if (q.isMulti) {
+      if (selected.has(letter)) selected.delete(letter);
+      else selected.add(letter);
+    } else {
+      selected.clear();
+      selected.add(letter);
+    }
+
+    q.options.forEach(([l]) => {
+      const btn = document.querySelector(`[data-letter="${l}"]`) as HTMLButtonElement;
+      const icon = document.getElementById(`icon-${l}`);
+      if (!btn || !icon) return;
+      if (selected.has(l)) {
+        btn.className = btn.className
+          .replace('border-slate-200 bg-white text-slate-700 hover:border-slate-300 hover:bg-slate-50', 'border-emerald-500 bg-emerald-50 text-slate-800');
+        btn.setAttribute('aria-pressed', 'true');
+        icon.className = 'w-6 h-6 rounded-full border-2 border-emerald-500 bg-emerald-500 flex items-center justify-center flex-shrink-0';
+        icon.innerHTML = `<svg class="w-3 h-3 text-white" fill="none" stroke="currentColor" stroke-width="3" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/></svg>`;
+      } else {
+        btn.className = btn.className
+          .replace('border-emerald-500 bg-emerald-50 text-slate-800', 'border-slate-200 bg-white text-slate-700 hover:border-slate-300 hover:bg-slate-50');
+        btn.setAttribute('aria-pressed', 'false');
+        icon.className = 'w-6 h-6 rounded-full border-2 border-slate-300 bg-white flex-shrink-0';
+        icon.innerHTML = '';
+      }
+    });
+
+    const checkBtn = document.getElementById('check-btn') as HTMLButtonElement;
+    const hasSelection = selected.size > 0;
+    checkBtn.disabled = !hasSelection;
+    checkBtn.className = hasSelection
+      ? 'w-full py-3 rounded-xl font-semibold text-sm bg-slate-800 text-white hover:bg-slate-700 transition-colors cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 focus-visible:ring-offset-2'
+      : 'w-full py-3 rounded-xl font-semibold text-sm bg-slate-300 text-white transition-colors cursor-not-allowed focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 focus-visible:ring-offset-2';
+  };
+
+  (window as Window & typeof globalThis & Record<string, unknown>).recallCheck = (): void => {
+    if (selected.size === 0) return;
+    checked = true;
+    const q = queue[0];
+    lastCorrect = isAnswerCorrect(selected, q.answer);
+
+    const optionsArea = document.getElementById('options-area') as HTMLElement;
+    optionsArea.innerHTML = q.options.map(([letter, text]) => {
+      const wasSelected = selected.has(letter);
+      const isCorrectOpt = q.answer.includes(letter);
+      let cls = 'w-full text-left px-5 py-4 rounded-xl border-2 transition-all duration-150 pointer-events-none ';
+      if (isCorrectOpt && wasSelected)  cls += 'border-green-500 bg-green-50 text-green-900';
+      else if (isCorrectOpt)            cls += 'border-green-400 bg-green-50 text-green-800';
+      else if (wasSelected)             cls += 'border-red-500 bg-red-50 text-red-900';
+      else                              cls += 'border-slate-200 bg-white text-slate-400';
+
+      const iconHtml = isCorrectOpt
+        ? `<span class="w-6 h-6 rounded-full border-2 border-green-500 bg-green-500 flex items-center justify-center flex-shrink-0"><svg class="w-3 h-3 text-white" fill="none" stroke="currentColor" stroke-width="3" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/></svg></span>`
+        : wasSelected
+          ? `<span class="w-6 h-6 rounded-full border-2 border-red-500 bg-red-500 flex items-center justify-center flex-shrink-0"><svg class="w-3 h-3 text-white" fill="none" stroke="currentColor" stroke-width="3" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg></span>`
+          : `<span class="w-6 h-6 rounded-full border-2 border-slate-300 bg-white flex-shrink-0"></span>`;
+
+      return `<div class="${cls}"><div class="flex items-start gap-3">${iconHtml}<span class="leading-relaxed text-sm">${escapeHtml(text)}</span></div></div>`;
+    }).join('');
+
+    (document.getElementById('check-btn') as HTMLElement).classList.add('hidden');
+
+    // Save rating to IndexedDB in background (non-blocking)
+    saveReviewRating(q.originalNumber, lastCorrect ? 'GREEN' : 'RED').catch(() => {
+      showError('Could not save progress — check your browser storage settings.');
+    });
+
+    const resultArea = document.getElementById('result-area') as HTMLElement;
+    resultArea.classList.remove('hidden');
+
+    const resultBadge = lastCorrect
+      ? `<div class="flex items-center gap-2 mb-4 p-3 bg-green-50 border border-green-200 rounded-xl">
+           <svg class="w-5 h-5 text-green-600 flex-shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+           <span class="text-sm font-semibold text-green-800">Correct — this card is mastered</span>
+         </div>`
+      : `<div class="flex items-center gap-2 mb-4 p-3 bg-red-50 border border-red-200 rounded-xl">
+           <svg class="w-5 h-5 text-red-600 flex-shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126z"/></svg>
+           <span class="text-sm font-semibold text-red-800">Incorrect — this card will repeat</span>
+         </div>`;
+
+    resultArea.innerHTML = `
+      ${resultBadge}
+      ${q.paraphrase ? `<div class="mb-3 p-4 bg-slate-50 border border-slate-200 rounded-xl">
+        <p class="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">In a nutshell</p>
+        <p class="text-slate-800 text-sm font-medium leading-relaxed whitespace-pre-line">${escapeHtml(q.paraphrase)}</p>
+      </div>` : ''}
+      <div class="mb-6 p-4 bg-slate-50 border border-slate-200 rounded-xl">
+        <p class="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">Explanation</p>
+        <p class="text-slate-700 text-sm leading-relaxed whitespace-pre-line">${escapeHtml(q.explanation)}</p>
+      </div>
+      <button
+        onclick="recallNext()"
+        class="w-full py-3 rounded-xl font-semibold text-sm ${lastCorrect ? 'bg-emerald-600 hover:bg-emerald-700' : 'bg-slate-800 hover:bg-slate-700'} text-white transition-colors cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 focus-visible:ring-offset-2"
+      >
+        ${lastCorrect ? 'Next Question →' : 'Try Again Later →'}
+      </button>
+    `;
+  };
+
+  (window as Window & typeof globalThis & Record<string, unknown>).recallNext = (): void => {
+    const q = queue.shift()!;
+    if (lastCorrect) {
+      masteredCount++;
+    } else {
+      const insertAt = Math.min(3, queue.length);
+      queue.splice(insertAt, 0, q);
+    }
+    renderCard();
+  };
+
+  document.addEventListener('keydown', (e: KeyboardEvent) => {
+    if ((e.target as HTMLElement).tagName === 'INPUT') return;
+    if (e.key === ' ' || e.key === 'Spacebar') {
+      e.preventDefault();
+      if (!checked) {
+        if (selected.size > 0) (window as any).recallCheck();
+      } else {
+        (window as any).recallNext();
+      }
+    }
+  });
+
+  (window as Window & typeof globalThis & Record<string, unknown>).handleReset = async (): Promise<void> => {
+    if (!confirm('Reset all progress? Every question will be treated as new on your next session.')) return;
+    await resetProgress();
+    window.location.href = '/';
+  };
+
+  // Boot — query IndexedDB, then filter + normalize questions
+  async function boot(): Promise<void> {
+    try {
+      await patchFirstVisitDueDates();
+      const allProgress = await getAllProgress();
+      const today = new Date().toISOString().slice(0, 10);
+      console.log(`[review] IndexedDB records: ${allProgress.length}, today: ${today}`);
+      if (allProgress.length > 0) {
+        console.log('[review] Sample nextReviewDates:', allProgress.slice(0, 5).map(p => `Q${p.questionNumber}=${p.nextReviewDate}`));
+      }
+
+      const dueNumbers = await getDueQuestionNumbers();
+      console.log(`[review] Due today: ${dueNumbers.length}`);
+      if (dueNumbers.length === 0) {
+        renderNoCards();
+        return;
+      }
+      const dueSet = new Set(dueNumbers);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const filtered = (questionsRaw as any[]).filter((q) => dueSet.has(q.question_number));
+      queue = normalizeQuestions(filtered);
+      totalCount = queue.length;
+      updateHeader();
+      renderCard();
+    } catch (err) {
+      area.innerHTML = `
+        <div class="text-center py-16">
+          <h2 class="text-xl font-bold text-slate-800 mb-2">Could not load review queue</h2>
+          <p class="text-slate-500 text-sm">${err instanceof Error ? escapeHtml(err.message) : 'Unknown error'}</p>
+          <a href="/" class="mt-6 inline-block bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold px-5 py-2.5 rounded-xl text-sm transition-colors">Back to Home</a>
+        </div>
+      `;
+    }
+  }
+
+  boot();
+</script>
